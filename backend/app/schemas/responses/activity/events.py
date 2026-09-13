@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.schemas.model_crud.activities import SleepStage
+from app.schemas.model_crud.activities.zones import HRZones, PowerZones
 from app.schemas.utils import SourceMetadata
 
 from .data_point_responses import TimeSeriesSample
@@ -26,6 +27,9 @@ class Workout(BaseModel):
     max_heart_rate_bpm: int | None = None
     avg_pace_sec_per_km: int | float | None = None
     elevation_gain_meters: float | None = None
+    segments: list[dict] | None = Field(None, description="FIT laps, splits and pool lengths, when available.")
+    hr_zones: HRZones | None = Field(None, description="Recorded time in heart-rate zones, when available.")
+    power_zones: PowerZones | None = Field(None, description="Recorded time in power zones, when available.")
 
 
 class WorkoutDetailed(Workout):
