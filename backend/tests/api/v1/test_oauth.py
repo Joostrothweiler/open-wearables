@@ -432,3 +432,68 @@ class TestOAuthCallbackProbe:
     def test_head_callback_invalid_provider(self, client: TestClient, db: Session) -> None:
         response = client.head("/api/v1/oauth/not-a-provider/callback")
         assert response.status_code == 400
+
+
+class TestOAuthCallbackError:
+    """A declined or failed authorization returns the user to the integrator's app when it gave a redirect_uri."""
+
+    def _state(self, client: TestClient, provider: str, redirect_uri: str | None) -> str:
+        params = {"user_id": str(uuid4())}
+        if redirect_uri:
+            params["redirect_uri"] = redirect_uri
+        response = client.get(f"/api/v1/oauth/{provider}/authorize", params=params)
+        assert response.status_code == 200
+        return response.json()["state"]
+
+    def test_error_redirects_to_stored_redirect_uri_with_code(self, client: TestClient, db: Session) -> None:
+        state = self._state(client, "polar", "https://app.example/dashboard?connected=polar")
+
+        response = client.get(
+            "/api/v1/oauth/polar/callback",
+            params={"error": "access_denied", "error_description": "<script>x</script>", "state": state},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == (
+            "https://app.example/dashboard?connected=polar&oauth_error=access_denied"
+        )
+
+    def test_error_state_is_single_use(self, client: TestClient, db: Session) -> None:
+        state = self._state(client, "polar", "https://app.example/dashboard")
+        client.get(
+            "/api/v1/oauth/polar/callback", params={"error": "access_denied", "state": state}, follow_redirects=False
+        )
+
+        again = client.get(
+            "/api/v1/oauth/polar/callback", params={"error": "access_denied", "state": state}, follow_redirects=False
+        )
+
+        assert again.headers["location"].startswith("/api/v1/oauth/error")
+
+    def test_error_without_redirect_uri_or_state_uses_internal_page(self, client: TestClient, db: Session) -> None:
+        state = self._state(client, "polar", None)
+        for params in ({"error": "access_denied", "state": state}, {"error": "access_denied"}):
+            response = client.get("/api/v1/oauth/polar/callback", params=params, follow_redirects=False)
+            assert response.status_code == 303
+            assert response.headers["location"].startswith("/api/v1/oauth/error")
+
+    def test_error_ignores_state_from_another_provider(self, client: TestClient, db: Session) -> None:
+        state = self._state(client, "garmin", "https://app.example/dashboard")
+
+        response = client.get(
+            "/api/v1/oauth/polar/callback", params={"error": "access_denied", "state": state}, follow_redirects=False
+        )
+
+        assert response.headers["location"].startswith("/api/v1/oauth/error")
+
+    def test_error_code_is_sanitized(self, client: TestClient, db: Session) -> None:
+        state = self._state(client, "polar", "https://app.example/dashboard")
+
+        response = client.get(
+            "/api/v1/oauth/polar/callback",
+            params={"error": "Access Denied!&x=1", "state": state},
+            follow_redirects=False,
+        )
+
+        assert response.headers["location"] == "https://app.example/dashboard?oauth_error=accessdeniedx1"
