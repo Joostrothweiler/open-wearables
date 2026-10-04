@@ -261,6 +261,20 @@ class BaseOAuthTemplate(ABC):
 
         return code_verifier, code_challenge
 
+    def consume_redirect_uri(self, state: str) -> str | None:
+        """Consumes the state of an abandoned flow and returns its frontend redirect URI, if any.
+
+        Used when the provider reports an error (e.g. the user declined access), so the
+        user can be sent back to the integrator's app instead of the internal error page.
+        """
+        try:
+            oauth_state, _ = self._validate_state(state)
+        except HTTPException:
+            return None
+        if oauth_state.provider != self.provider_name:
+            return None
+        return oauth_state.redirect_uri
+
     def _validate_state(self, state: str) -> tuple[OAuthState, str | None]:
         """Validates and consumes the OAuth state from Redis."""
         redis_key = f"oauth_state:{state}"

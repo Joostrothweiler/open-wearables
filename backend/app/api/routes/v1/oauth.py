@@ -1,5 +1,7 @@
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -31,6 +33,19 @@ def resolve_provider(slug: str) -> ProviderName:
         return ProviderName(from_url_slug(slug))
     except ValueError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown provider: '{slug}'")
+
+
+def error_code(error: str) -> str:
+    """Reduces a provider error to an OAuth-style code such as ``access_denied``."""
+    code = re.sub(r"[^a-z0-9_]", "", error.lower())[:64]
+    return code or "unknown_error"
+
+
+def with_query(url: str, **params: str) -> str:
+    """Adds query parameters to a URL, keeping its existing ones."""
+    parts = urlsplit(url)
+    query = parse_qsl(parts.query, keep_blank_values=True) + list(params.items())
+    return urlunsplit(parts._replace(query=urlencode(query)))
 
 
 def get_oauth_strategy(provider: ProviderName) -> BaseProviderStrategy:
@@ -89,6 +104,14 @@ def oauth_callback(
     Provider redirects here after user authorizes. Exchanges code for tokens.
     """
     if error:
+        # Send the user back to the integrator's app when the flow recorded one, with a
+        # short machine-readable code (never the provider's free-text description).
+        if state:
+            strategy = get_oauth_strategy(resolve_provider(provider))
+            assert strategy.oauth
+            redirect_uri = strategy.oauth.consume_redirect_uri(state)
+            if redirect_uri:
+                return RedirectResponse(url=with_query(redirect_uri, oauth_error=error_code(error)), status_code=303)
         return RedirectResponse(
             url=f"/api/v1/oauth/error?message={error}:+{error_description or 'Unknown+error'}",
             status_code=303,
